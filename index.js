@@ -1,11 +1,17 @@
 const express = require("express");
 const cors = require("cors");
-const { makeWASocket, useMultiFileAuthState } = require("@whiskeysockets/baileys");
+const { makeWASocket, useMultiFileAuthState, makePairingCode, DisconnectReason } = require("@whiskeysockets/baileys");
 const QRCode = require("qrcode");
+const fs = require("fs");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Sessions folder create if not exists
+if (!fs.existsSync("./sessions")) {
+  fs.mkdirSync("./sessions");
+}
 
 const sessions = {};
 
@@ -14,7 +20,7 @@ app.post("/pair", async (req, res) => {
   const { phone } = req.body;
 
   if (!phone) {
-    return res.json({ success: false, error: "Phone number bhejo" });
+    return res.json({ success: false, error: "Phone number required" });
   }
 
   try {
@@ -22,49 +28,28 @@ app.post("/pair", async (req, res) => {
     
     const sock = makeWASocket({
       auth: state,
-      printQRInTerminal: false
+      printQRInTerminal: false,
+      browser: ["PWEA", "Chrome", "1.0.0"]
     });
 
-    // ✅ FIXED: Baileys v6 me makePairingCode ka sahi use
-    let pairCode;
-    
-    if (typeof sock.requestPairingCode === "function") {
-      // Newer version
-      pairCode = await sock.requestPairingCode(phone);
-    } else if (typeof makePairingCode === "function") {
-      // Older version
-      const { makePairingCode } = require("@whiskeysockets/baileys");
-      pairCode = await makePairingCode(sock);
-    } else {
-      // Fallback: socket event se code lo
-      pairCode = await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject("Pair code timeout"), 30000);
-        sock.ev.on("connection.update", (update) => {
-          if (update.qr) {
-            clearTimeout(timeout);
-            resolve(update.qr);
-          }
-        });
-      });
-    }
+    // Generate pair code
+    const code = await makePairingCode(sock);
+    const qrData = await QRCode.toDataURL(code);
 
-    const qrData = await QRCode.toDataURL(pairCode);
-
-    sessions[phone] = {
-      sock,
-      saveCreds,
-      connected: false
-    };
+    sessions[phone] = { sock, saveCreds, connected: false };
 
     sock.ev.on("connection.update", (update) => {
-      const { connection } = update;
+      const { connection, lastDisconnect } = update;
+      
       if (connection === "open") {
         sessions[phone].connected = true;
         console.log(`${phone} CONNECTED ✅`);
       }
+      
       if (connection === "close") {
+        const reason = lastDisconnect?.error?.output?.statusCode;
+        console.log(`${phone} CLOSED - Reason: ${reason}`);
         delete sessions[phone];
-        console.log(`${phone} DISCONNECTED ❌`);
       }
     });
 
@@ -72,12 +57,12 @@ app.post("/pair", async (req, res) => {
 
     res.json({
       success: true,
-      pairCode: pairCode,
+      pairCode: code,
       qrCode: qrData
     });
 
   } catch (err) {
-    console.error("Pair Error:", err);
+    console.error("Pair Error:", err.message);
     res.json({ success: false, error: err.message });
   }
 });
@@ -86,35 +71,19 @@ app.post("/pair", async (req, res) => {
 app.get("/status/:phone", (req, res) => {
   const { phone } = req.params;
   const session = sessions[phone];
-
-  res.json({
-    phone: phone,
-    connected: session ? session.connected : false
-  });
-});
-
-// DISCONNECT
-app.post("/disconnect", async (req, res) => {
-  const { phone } = req.body;
-  const session = sessions[phone];
-
-  if (session) {
-    try {
-      await session.sock.logout();
-      delete sessions[phone];
-      res.json({ success: true, message: "Disconnected" });
-    } catch (e) {
-      res.json({ success: false, error: e.message });
-    }
-  } else {
-    res.json({ success: false, error: "Session nahi mili" });
-  }
+  res.json({ phone, connected: session ? session.connected : false });
 });
 
 // HOME
 app.get("/", (req, res) => {
-  res.send("PWEA Web Pair Server Rungning ✅");
+  const active = Object.keys(sessions).length;
+  res.send(`PWEA Server Running ✅ | Active: ${active}`);
 });
 
+// Keep alive self ping
+setInterval(() => {
+  console.log("Server alive - Active sessions:", Object.keys(sessions).length);
+}, 60000);
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`PWEA Server on port ${PORT}`));
+app.listen(PORT, () => console.log(`PWEA on port ${PORT}`));
