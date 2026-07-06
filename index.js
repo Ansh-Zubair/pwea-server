@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const { makeWASocket, useMultiFileAuthState, makePairingCode, DisconnectReason } = require("@whiskeysockets/baileys");
+const { makeWASocket, useMultiFileAuthState } = require("@whiskeysockets/baileys");
 const QRCode = require("qrcode");
 const fs = require("fs");
 
@@ -8,7 +8,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Sessions folder create if not exists
 if (!fs.existsSync("./sessions")) {
   fs.mkdirSync("./sessions");
 }
@@ -29,27 +28,30 @@ app.post("/pair", async (req, res) => {
     const sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      browser: ["PWEA", "Chrome", "1.0.0"]
+      browser: ["PWEA", "Chrome", "1.0.0"],
+      mobile: false
     });
 
-    // Generate pair code
-    const code = await makePairingCode(sock);
+    // ✅ Beta method se pair code generate
+    const code = await sock.requestPairingCode(phone);
+    
+    if (!code) {
+      return res.json({ success: false, error: "Pair code generate nahi hua" });
+    }
+
     const qrData = await QRCode.toDataURL(code);
 
     sessions[phone] = { sock, saveCreds, connected: false };
 
     sock.ev.on("connection.update", (update) => {
-      const { connection, lastDisconnect } = update;
-      
+      const { connection } = update;
       if (connection === "open") {
         sessions[phone].connected = true;
         console.log(`${phone} CONNECTED ✅`);
       }
-      
       if (connection === "close") {
-        const reason = lastDisconnect?.error?.output?.statusCode;
-        console.log(`${phone} CLOSED - Reason: ${reason}`);
         delete sessions[phone];
+        console.log(`${phone} DISCONNECTED ❌`);
       }
     });
 
@@ -77,13 +79,8 @@ app.get("/status/:phone", (req, res) => {
 // HOME
 app.get("/", (req, res) => {
   const active = Object.keys(sessions).length;
-  res.send(`PWEA Server Running ✅ | Active: ${active}`);
+  res.send(`PWEA Server Running ✅ | Active Sessions: ${active}`);
 });
 
-// Keep alive self ping
-setInterval(() => {
-  console.log("Server alive - Active sessions:", Object.keys(sessions).length);
-}, 60000);
-
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`PWEA on port ${PORT}`));
+app.listen(PORT, () => console.log(`PWEA Server on port ${PORT}`));
