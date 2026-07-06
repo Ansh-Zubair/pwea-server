@@ -113,7 +113,7 @@ app.post("/disconnect", async (req, res) => {
 
 // HOME
 app.get("/", (req, res) => {
-  res.send("PWEA Web Pair Server Running ✅");
+  res.send("PWEA Web Pair Server Rungning ✅");
 });
 
 const PORT = process.env.PORT || 3000;
