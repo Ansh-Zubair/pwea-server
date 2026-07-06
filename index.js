@@ -1,16 +1,15 @@
 const express = require("express");
 const cors = require("cors");
-const { makeWASocket, useMultiFileAuthState, makePairingCode } = require("@whiskeysockets/baileys");
+const { makeWASocket, useMultiFileAuthState } = require("@whiskeysockets/baileys");
 const QRCode = require("qrcode");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Sessions store (memory me)
 const sessions = {};
 
-// Pair Code Generate ✅
+// PAIR CODE GENERATE
 app.post("/pair", async (req, res) => {
   const { phone } = req.body;
 
@@ -20,13 +19,36 @@ app.post("/pair", async (req, res) => {
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(`./sessions/${phone}`);
+    
     const sock = makeWASocket({
       auth: state,
       printQRInTerminal: false
     });
 
-    const code = await makePairingCode(sock);
-    const qrData = await QRCode.toDataURL(code);
+    // ✅ FIXED: Baileys v6 me makePairingCode ka sahi use
+    let pairCode;
+    
+    if (typeof sock.requestPairingCode === "function") {
+      // Newer version
+      pairCode = await sock.requestPairingCode(phone);
+    } else if (typeof makePairingCode === "function") {
+      // Older version
+      const { makePairingCode } = require("@whiskeysockets/baileys");
+      pairCode = await makePairingCode(sock);
+    } else {
+      // Fallback: socket event se code lo
+      pairCode = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject("Pair code timeout"), 30000);
+        sock.ev.on("connection.update", (update) => {
+          if (update.qr) {
+            clearTimeout(timeout);
+            resolve(update.qr);
+          }
+        });
+      });
+    }
+
+    const qrData = await QRCode.toDataURL(pairCode);
 
     sessions[phone] = {
       sock,
@@ -50,16 +72,17 @@ app.post("/pair", async (req, res) => {
 
     res.json({
       success: true,
-      pairCode: code,
+      pairCode: pairCode,
       qrCode: qrData
     });
 
   } catch (err) {
+    console.error("Pair Error:", err);
     res.json({ success: false, error: err.message });
   }
 });
 
-// Status Check ✅
+// STATUS CHECK
 app.get("/status/:phone", (req, res) => {
   const { phone } = req.params;
   const session = sessions[phone];
@@ -70,7 +93,7 @@ app.get("/status/:phone", (req, res) => {
   });
 });
 
-// Disconnect ✅
+// DISCONNECT
 app.post("/disconnect", async (req, res) => {
   const { phone } = req.body;
   const session = sessions[phone];
@@ -88,16 +111,7 @@ app.post("/disconnect", async (req, res) => {
   }
 });
 
-// List Active Numbers ✅
-app.get("/sessions", (req, res) => {
-  const list = Object.entries(sessions).map(([phone, data]) => ({
-    phone,
-    connected: data.connected
-  }));
-  res.json({ success: true, sessions: list });
-});
-
-// Home
+// HOME
 app.get("/", (req, res) => {
   res.send("PWEA Web Pair Server Running ✅");
 });
