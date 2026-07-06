@@ -14,7 +14,6 @@ if (!fs.existsSync("./sessions")) {
 
 const sessions = {};
 
-// PAIR CODE GENERATE
 app.post("/pair", async (req, res) => {
   const { phone } = req.body;
 
@@ -28,17 +27,11 @@ app.post("/pair", async (req, res) => {
     const sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
-      browser: ["PWEA", "Chrome", "1.0.0"],
-      mobile: false
+      browser: ["PWEA", "Chrome", "1.0.0"]
     });
 
-    // ✅ Beta method se pair code generate
+    // v6.7.0 me requestPairingCode available hai
     const code = await sock.requestPairingCode(phone);
-    
-    if (!code) {
-      return res.json({ success: false, error: "Pair code generate nahi hua" });
-    }
-
     const qrData = await QRCode.toDataURL(code);
 
     sessions[phone] = { sock, saveCreds, connected: false };
@@ -47,11 +40,9 @@ app.post("/pair", async (req, res) => {
       const { connection } = update;
       if (connection === "open") {
         sessions[phone].connected = true;
-        console.log(`${phone} CONNECTED ✅`);
       }
       if (connection === "close") {
         delete sessions[phone];
-        console.log(`${phone} DISCONNECTED ❌`);
       }
     });
 
@@ -64,23 +55,20 @@ app.post("/pair", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Pair Error:", err.message);
+    console.error("Error:", err.message);
     res.json({ success: false, error: err.message });
   }
 });
 
-// STATUS CHECK
 app.get("/status/:phone", (req, res) => {
   const { phone } = req.params;
   const session = sessions[phone];
   res.json({ phone, connected: session ? session.connected : false });
 });
 
-// HOME
 app.get("/", (req, res) => {
-  const active = Object.keys(sessions).length;
-  res.send(`PWEA Server Running ✅ | Active Sessions: ${active}`);
+  res.send("PWEA Server Running ✅");
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`PWEA Server on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server on ${PORT}`));
