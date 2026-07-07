@@ -1,69 +1,52 @@
 const express = require("express");
 const cors = require("cors");
-const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require("@whiskeysockets/baileys");
-const QRCode = require("qrcode");
+const pino = require("pino");
 const fs = require("fs");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-if (!fs.existsSync("./sessions")) {
-  fs.mkdirSync("./sessions");
+if (!fs.existsSync("./sessions")) fs.mkdirSync("./sessions");
+
+let Baileys;
+async function init() {
+  Baileys = await import("@whiskeysockets/baileys");
+  console.log("✅ Baileys Ready");
 }
+init();
 
 const sessions = {};
 
+// PAIR CODE ONLY
 app.post("/pair", async (req, res) => {
   const { phone } = req.body;
+  if (!phone) return res.json({ success: false, error: "Phone required" });
 
-  if (!phone) {
-    return res.json({ success: false, error: "Phone number required" });
-  }
+  if (!Baileys) return res.json({ success: false, error: "Server loading, wait 10s" });
 
   try {
-    const { state, saveCreds } = await useMultiFileAuthState(`./sessions/${phone}`);
+    const { state, saveCreds } = await Baileys.useMultiFileAuthState(`./sessions/${phone}`);
 
-    const sock = makeWASocket({
+    const sock = Baileys.default({
       auth: state,
-      printQRInTerminal: false,
+      logger: pino({ level: "silent" }),
       browser: ["PWEA", "Chrome", "1.0.0"],
-      markOnlineOnConnect: true,
-      connectTimeoutMs: 60000,
-      keepAliveIntervalMs: 30000
+      printQRInTerminal: false
     });
 
-    const code = await sock.requestPairingCode(phone);
+    const code = await Baileys.makePairingCode(sock);
 
-    if (!code) {
-      return res.json({ success: false, error: "Code generate nahi hua" });
-    }
-
-    const qrData = await QRCode.toDataURL(code);
+    if (!code) return res.json({ success: false, error: "Code not generated, retry" });
 
     sessions[phone] = { sock, saveCreds, connected: false };
 
-    // Connection handler with reconnection
     sock.ev.on("connection.update", (update) => {
-      const { connection, lastDisconnect } = update;
-
-      if (connection === "open") {
+      if (update.connection === "open") {
         sessions[phone].connected = true;
-        console.log(`${phone} CONNECTED ✅`);
       }
-
-      if (connection === "close") {
-        const statusCode = lastDisconnect?.error?.output?.statusCode;
-        
-        if (statusCode === DisconnectReason.loggedOut) {
-          delete sessions[phone];
-          console.log(`${phone} LOGGED OUT ❌`);
-        } else if (statusCode === DisconnectReason.connectionClosed) {
-          console.log(`${phone} Connection closed — user ne pair kiya hoga`);
-          // Keep session, status check se pata chalega
-        } else {
-          console.log(`${phone} Closed: ${statusCode}`);
-        }
+      if (update.connection === "close") {
+        delete sessions[phone];
       }
     });
 
@@ -71,64 +54,26 @@ app.post("/pair", async (req, res) => {
 
     res.json({
       success: true,
-      pairCode: code,
-      qrCode: qrData
+      pairCode: code
     });
 
   } catch (err) {
-    console.error("Error:", err.message);
     res.json({ success: false, error: err.message });
   }
 });
 
-// STATUS CHECK — most important
+// STATUS CHECK
 app.get("/status/:phone", async (req, res) => {
   const { phone } = req.params;
-
   try {
-    const { state } = await useMultiFileAuthState(`./sessions/${phone}`);
-    const creds = state?.creds;
-
-    // Check if session file exists and has valid creds
-    if (creds?.me?.id) {
-      // Try reconnect to check
-      const sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: false,
-        browser: ["PWEA", "Chrome", "1.0.0"],
-        connectTimeoutMs: 10000
-      });
-
-      const connected = await new Promise((resolve) => {
-        const timeout = setTimeout(() => resolve(false), 8000);
-        
-        sock.ev.on("connection.update", (update) => {
-          const { connection } = update;
-          if (connection === "open") {
-            clearTimeout(timeout);
-            sock.end();
-            resolve(true);
-          }
-          if (connection === "close") {
-            clearTimeout(timeout);
-            resolve(false);
-          }
-        });
-      });
-
-      res.json({ phone, connected });
-    } else {
-      res.json({ phone, connected: false });
-    }
+    const { state } = await Baileys.useMultiFileAuthState(`./sessions/${phone}`);
+    res.json({ connected: state?.creds?.me?.id ? true : false });
   } catch (e) {
-    res.json({ phone, connected: false });
+    res.json({ connected: false });
   }
 });
 
-app.get("/", (req, res) => {
-  const count = Object.keys(sessions).length;
-  res.send(`PWEA Server ✅ | Active: ${count}`);
-});
+app.get("/", (req, res) => res.send("PWEA ✅"));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server on ${PORT}`));
