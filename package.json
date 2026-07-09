@@ -1,13 +1,21 @@
 {
   "name": "pwea-server",
-  "version": "2.0.0",
+  "version": "1.0.0",
+  "description": "PWEA Pakistan WhatsApp Earning App Baileys Backend Engine",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "6.7.1",
-    "express": "4.18.2",
-    "cors": "2.8.5",
-    "pino": "8.17.2"
-  }
+    "@whiskeysockets/baileys": "^6.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "pino": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Ansh-Zubair",
+  "license": "MIT"
 }
